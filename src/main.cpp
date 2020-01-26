@@ -39,6 +39,8 @@
 
 
 //#define MEM_DEBUG 1
+//#define USE_GETOPT
+
 #ifdef MEM_DEBUG
     #include <mcheck.h>
     #define SOCLE_MEM_PROFILE
@@ -46,53 +48,35 @@
 
 
 #include <vector>
-
-#include <ctime>
 #include <cstdlib>
-#include <sys/stat.h>
-#include <sys/types.h>
-
 #include <ostream>
-#include <ios>
 
-#include <getopt.h>
-#include <execinfo.h>
+#include <sys/stat.h>
 
 #include <openssl/crypto.h>
-
-#include <socle.hpp>
-
-#include <log/logger.hpp>
-#include <hostcx.hpp>
-#include <apphostcx.hpp>
-#include <baseproxy.hpp>
-#include <masterproxy.hpp>
-#include <threadedacceptor.hpp>
-#include <threadedreceiver.hpp>
-#include <sslcom.hpp>
-#include <sslmitmcom.hpp>
-#include <udpcom.hpp>
-#include <display.hpp>
-
-#include <main.hpp>
-#include <traflog.hpp>
-#include <display.hpp>
+#include <getopt.h>
 
 #include <libconfig.h++>
 
-#include <proxy/mitmhost.hpp>
-#include <proxy/mitmproxy.hpp>
-#include <proxy/socks5/socksproxy.hpp>
+#ifndef USE_GETOPT
+#include <ext/argparse/argparse.h>
+#endif
 
+#include <socle.hpp>
+#include <log/logger.hpp>
+
+#include <hostcx.hpp>
+#include <sslcom.hpp>
+#include <udpcom.hpp>
+#include <display.hpp>
 #include <cfgapi.hpp>
-#include <service/daemon.hpp>
-#include <cmdserver.hpp>
-#include <service/srvutils.hpp>
 #include <staticcontent.hpp>
-#include <smithlog.hpp>
-#include <service/dnsupd/smithdnsupd.hpp>
 
+#include <smithlog.hpp>
+#include <service/daemon.hpp>
 #include <service/smithproxy.hpp>
+
+#include <main.hpp>
 
 
 void prepare_queue_logger(loglevel const& lev) {
@@ -212,8 +196,10 @@ void prepare_tenanting(bool is_custom_file) {
 }
 
 
+
 int main(int argc, char *argv[]) {
 
+#ifdef USE_GETOPT
     static struct option long_options[] =
             {
                     /* These options set a flag. */
@@ -233,7 +219,52 @@ int main(int argc, char *argv[]) {
                     {"tenant-name", required_argument, 0, 't'},
                     {0, 0, 0, 0}
             };
+#else
 
+    using namespace argparse;
+
+    ArgumentParser args("smithproxy");
+
+    // Commented out deprecated options
+
+    //args.addArgument("--debug", false);
+    //args.addArgument("--diagnose", false);
+    //args.addArgument("--dump", false);
+    //args.addArgument("--extreme", false);
+
+    args.add_argument()
+        .names({"-c", "--config-file"})
+        .description("custom config file (optional)");
+
+    args.add_argument()
+        .names({"-o", "--config-check-only"})
+        .description("check config and exit");
+
+    args.add_argument()
+        .names({"-D", "--daemonize"})
+        .description("fork to background");
+
+    args.add_argument()
+        .names({"-v", "--version"})
+        .description("print version and exit");
+
+    args.add_argument()
+        .names({"-i", "--tenant-index"})
+        .description("optional tenancy support: set tenant index");
+    args.add_argument()
+        .names({"-t", "--tenant-name"})
+        .description("optional tenancy support: set tenant name (index required)");
+
+
+    try {
+        args.parse(argc, const_cast<const char**>(argv));
+
+    } catch(std::exception const& e) {
+        std::cerr << "error parsing arguments: " << e.what() << "\n";
+        exit(1);
+    }
+
+#endif
 
     DaemonFactory& this_daemon = DaemonFactory::instance();
     auto& log = this_daemon.log;
@@ -245,6 +276,7 @@ int main(int argc, char *argv[]) {
     CfgFactory::get().config_file = "/etc/smithproxy/smithproxy.cfg";
     bool is_custom_config_file = false;
 
+#ifdef USE_GETOPT
     while(1) {
     /* getopt_long stores the option index here. */
         int option_index = 0;
@@ -291,6 +323,47 @@ int main(int argc, char *argv[]) {
         }
     }
 
+#else
+
+    try {
+        if (args.exists("config-file")) {
+
+            std::cout << "exists!\n";
+
+            CfgFactory::get().config_file = args.get<std::string>("config-file");
+            is_custom_config_file = true;
+        }
+
+        if(args.exists("config-check-only")) {
+            CfgFactory::get().config_file_check_only = true;
+            get_logger()->dup2_cout(true);
+        }
+
+        if(args.exists("daemonize")) {
+            SmithProxy::instance().cfg_daemonize = true;
+        }
+
+        if(args.exists("tenant-index")) {
+            CfgFactory::get().tenant_index = args.get<int>("tenant-index");
+
+            if(args.exists("tenant-name")) {
+                CfgFactory::get().tenant_name = args.get<std::string>("tenant-name");
+            } else {
+                CfgFactory::get().tenant_name = string_format("tnt-%d", CfgFactory::get().tenant_index);
+            }
+        }
+
+        if(args.exists("version")) {
+            std::cout << SMITH_VERSION << "+" << SOCLE_VERSION << std::endl;
+            exit(0);
+        }
+
+    } catch( std::bad_cast const& e) {
+        std::cerr << "incorrect argument value: " << e.what() << "\n";
+        exit(2);
+    }
+#endif
+
     // set synchronous logger for the beginning
     set_logger(new logger());
     get_logger()->level(WAR);
@@ -324,10 +397,10 @@ int main(int argc, char *argv[]) {
 
 
 
-    // if logging set in cmd line, use it 
-    if(CfgFactory::get().args_debug_flag > NON) {
-        get_logger()->level(CfgFactory::get().args_debug_flag);
-    }
+    // if logging set in cmd line, use it (this option is deprecated)
+    //if(CfgFactory::get().args_debug_flag > NON) {
+    //    get_logger()->level(CfgFactory::get().args_debug_flag);
+    //}
     
     // set level to what's in the config
     if (! CONFIG_LOADED ) {

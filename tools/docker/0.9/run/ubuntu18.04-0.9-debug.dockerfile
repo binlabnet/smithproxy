@@ -11,6 +11,7 @@ RUN apt -y install gdb && \
 git clone https://github.com/astibal/smithproxy.git -b master smithproxy && \
 cd smithproxy && \
 git clone https://github.com/astibal/socle.git -b master socle && \
+git clone https://github.com/astibal/argparse.git -b develop ext/argparse && \
 mkdir build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Debug && make install
 
 # Define environment variable
